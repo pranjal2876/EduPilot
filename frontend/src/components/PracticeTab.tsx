@@ -1,13 +1,14 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Target, CheckCircle2, XCircle, FileText, ArrowRight, RefreshCw, Trophy } from 'lucide-react';
 import { fetchApi, PracticeQuizResponse, PracticeSubmissionResult } from '../lib/api';
 
 interface PracticeTabProps {
   studentId: string;
+  initialTopic?: string;
 }
 
-export const PracticeTab: React.FC<PracticeTabProps> = ({ studentId }) => {
-  const [topic, setTopic] = useState('Profit and Loss');
+export const PracticeTab: React.FC<PracticeTabProps> = ({ studentId, initialTopic }) => {
+  const [topic, setTopic] = useState(initialTopic || 'Profit and Loss');
   const [difficulty, setDifficulty] = useState('medium');
   const [numQuestions, setNumQuestions] = useState(5);
   const [loading, setLoading] = useState(false);
@@ -18,7 +19,17 @@ export const PracticeTab: React.FC<PracticeTabProps> = ({ studentId }) => {
   const [submissionResult, setSubmissionResult] = useState<PracticeSubmissionResult | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const topicsList = [
+  useEffect(() => {
+    if (initialTopic) {
+      setTopic(initialTopic);
+      // Reset active quiz when topic changes from navigation
+      setActiveQuiz(null);
+      setSubmissionResult(null);
+      setSelectedAnswers({});
+    }
+  }, [initialTopic]);
+
+  const baseTopics = [
     'Profit and Loss',
     'Database Normalization',
     'Python',
@@ -26,6 +37,10 @@ export const PracticeTab: React.FC<PracticeTabProps> = ({ studentId }) => {
     'Percentages',
     'Time and Work',
   ];
+
+  const topicsList = initialTopic && !baseTopics.includes(initialTopic)
+    ? [initialTopic, ...baseTopics]
+    : baseTopics;
 
   const handleGenerateQuiz = async () => {
     setLoading(true);

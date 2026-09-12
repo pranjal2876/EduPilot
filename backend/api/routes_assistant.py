@@ -30,3 +30,17 @@ def chat_with_assistant(
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Orchestration error: {str(e)}")
+
+@router.get("/scenarios")
+def get_evaluation_scenarios():
+    """
+    Phase 14 & 15: Golden Evaluation Scenarios
+    Returns the 20 benchmark test scenarios for live system verification and compliance auditing.
+    """
+    import json
+    from pathlib import Path
+    scenarios_path = Path(__file__).resolve().parent.parent / "evaluation" / "scenarios.json"
+    if scenarios_path.exists():
+        with open(scenarios_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return []

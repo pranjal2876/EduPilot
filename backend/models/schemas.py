@@ -134,3 +134,4 @@ class ChatResponse(BaseModel):
     tools_used: List[str]
     sources: List[str]
     data_trace: Optional[Dict[str, Any]] = None
+    latency_ms: Optional[int] = None

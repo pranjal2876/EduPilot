@@ -1,6 +1,15 @@
 // Frontend API Client for AI College Learning Assistant
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
+const getApiBase = (): string => {
+  const envUrl = process.env.NEXT_PUBLIC_API_URL || process.env.NEXT_PUBLIC_API_BASE_URL;
+  if (envUrl) {
+    return envUrl.replace(/\/+$/, '');
+  }
+  if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
+    return 'http://127.0.0.1:8000';
+  }
+  return '';
+};
 
 export interface StudentProfile {
   student_id: string;
@@ -125,6 +134,7 @@ export interface ChatResponse {
   tools_used: string[];
   sources: string[];
   data_trace?: any;
+  latency_ms?: number;
 }
 
 export interface PracticeQuestion {
@@ -170,7 +180,8 @@ export async function fetchApi<T>(endpoint: string, studentId: string, options: 
     ...(options.headers || {}),
   };
 
-  const url = `${API_BASE}/api/v1${endpoint}`;
+  const base = getApiBase();
+  const url = `${base}/api/v1${endpoint}`;
   const res = await fetch(url, { ...options, headers });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));

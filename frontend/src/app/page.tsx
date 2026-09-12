@@ -8,6 +8,7 @@ import { PerformanceTab } from '../components/PerformanceTab';
 import { PracticeTab } from '../components/PracticeTab';
 import { AssessmentsTab } from '../components/AssessmentsTab';
 import { StudyCoachTab } from '../components/StudyCoachTab';
+import { AuditTab } from '../components/AuditTab';
 import {
   fetchApi,
   DemoStudent,
@@ -54,6 +55,7 @@ const DEFAULT_DEMO_STUDENTS: DemoStudent[] = [
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [practiceTopic, setPracticeTopic] = useState<string>('Profit and Loss');
   const [demoStudents, setDemoStudents] = useState<DemoStudent[]>(DEFAULT_DEMO_STUDENTS);
   const [activeStudentId, setActiveStudentId] = useState<string>('02754054-361a-4025-be96-1bd8a049ae18');
 
@@ -147,7 +149,12 @@ export default function Home() {
               />
             )}
 
-            {activeTab === 'practice' && <PracticeTab studentId={activeStudentId} />}
+            {activeTab === 'practice' && (
+              <PracticeTab
+                studentId={activeStudentId}
+                initialTopic={practiceTopic}
+              />
+            )}
 
             {activeTab === 'assessments' && <AssessmentsTab studentId={activeStudentId} />}
 
@@ -155,10 +162,13 @@ export default function Home() {
               <StudyCoachTab
                 recommendation={recommendation}
                 onStartPractice={(targetTopic) => {
+                  setPracticeTopic(targetTopic);
                   setActiveTab('practice');
                 }}
               />
             )}
+
+            {activeTab === 'audit' && <AuditTab studentId={activeStudentId} />}
           </>
         )}
       </main>

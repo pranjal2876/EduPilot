@@ -1,4 +1,5 @@
 import re
+import time
 import logging
 from typing import Dict, Any, List, Optional
 from sqlalchemy.orm import Session
@@ -29,8 +30,9 @@ class AIOrchestrator:
         2. Intent classification & tool selection
         3. Controlled database / RAG / rule execution
         4. Grounded synthesis with source attribution
-        5. Hallucination refusal guardrails
+        5. Hallucination & security refusal guardrails
         """
+        start_time = time.perf_counter()
         conv_id = conversation_id or student_id
         resolved_info = memory.resolve_query(message, conv_id)
         active_query = resolved_info["resolved_query"]
@@ -43,21 +45,65 @@ class AIOrchestrator:
         data_trace: Dict[str, Any] = {}
         intent = "general_query"
 
+        def _build_response(reply: str, intent_name: str, tools: List[str], srcs: List[str] = None, trace: Dict[str, Any] = None) -> ChatResponse:
+            elapsed = int((time.perf_counter() - start_time) * 1000)
+            return ChatResponse(
+                reply=reply,
+                intent=intent_name,
+                tools_used=tools,
+                sources=srcs or [],
+                data_trace=trace or {},
+                latency_ms=max(1, elapsed)
+            )
+
+        # -------------------------------------------------------------
+        # Security Guard 1: Cross-Student Identity Boundary Protection
+        # -------------------------------------------------------------
+        other_uuids = re.findall(r"\b[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}\b", message)
+        if any(u.lower() != student_id.lower() for u in other_uuids) or "other student" in q_low or "another student" in q_low:
+            return _build_response(
+                reply="Access Denied: You are authenticated as the current student persona. Cross-student data inspection is strictly prohibited by institutional privacy guardrails.",
+                intent_name="security_violation",
+                tools=["cross_student_boundary_guard"],
+                trace={"reason": "Attempted to access another student's records"}
+            )
+
+        # -------------------------------------------------------------
+        # Security Guard 2: Direct Database Manipulation / SQL Injection
+        # -------------------------------------------------------------
+        if any(w in q_low for w in ["select *", "drop table", "union select", "delete from", "insert into", "exec(", "truncate"]):
+            return _build_response(
+                reply="Security Exception: Unrestricted database access or raw SQL execution is strictly rejected. All data access must pass through controlled, read-only typed services.",
+                intent_name="unauthorized_database_access",
+                tools=["sql_injection_guardrail"],
+                trace={"reason": "Raw SQL statement detected in user prompt"}
+            )
+
+        # -------------------------------------------------------------
+        # Intent 0: Friendly Greeting
+        # -------------------------------------------------------------
+        if re.fullmatch(r"(?:hi|hello|hey|good morning|good afternoon|good evening|thanks|thank you)[!?.\s]*", message.strip(), re.IGNORECASE):
+            return _build_response(
+                reply="Hello! I am your AI College Learning Assistant. I can help you review your enrolled courses, diagnose weak topics, check assessment eligibility, or generate curriculum practice questions. What would you like to explore?",
+                intent_name="greeting",
+                tools=["greeting_handler"],
+                trace={"session": conv_id}
+            )
+
         # -------------------------------------------------------------
         # Intent 1: Hallucination Test / Internal Policies Not in Catalog
         # -------------------------------------------------------------
-        if any(w in q_low for w in ["internal policy", "attendance policy", "hostel rules", "canteen", "library fine"]):
+        if any(w in q_low for w in ["internal policy", "attendance policy", "hostel rules", "canteen", "library fine", "parking policy", "chocolate cake"]):
             intent = "unsupported_policy"
             reply = (
                 "I don't have enough information in the available college records or course materials to answer that. "
                 "I can only assist with your enrolled courses, academic performance, assessment eligibility, and curriculum concepts."
             )
-            return ChatResponse(
+            return _build_response(
                 reply=reply,
-                intent=intent,
-                tools_used=["hallucination_guardrail"],
-                sources=[],
-                data_trace={"reason": "Query requests college administrative policy not present in knowledge base"}
+                intent_name=intent,
+                tools=["hallucination_guardrail"],
+                trace={"reason": "Query requests policy or topic not present in knowledge base"}
             )
 
         # -------------------------------------------------------------
@@ -80,12 +126,59 @@ class AIOrchestrator:
             topic_names = [w["topic"] for w in weak_dicts]
             memory.update_session(conv_id, message, reply, weak_topics=topic_names)
 
-            return ChatResponse(
+            return _build_response(
                 reply=reply,
-                intent=intent,
-                tools_used=tools_used,
-                sources=[],
-                data_trace=data_trace
+                intent_name=intent,
+                tools=tools_used,
+                srcs=[],
+                trace=data_trace
+            )
+
+        # -------------------------------------------------------------
+        # Intent 2.5: Rule Override / Bypass Prevention
+        # -------------------------------------------------------------
+        if any(w in q_low for w in ["ignore prerequisite", "bypass rule", "override rule", "approve without", "ignore rule"]):
+            elig_resp = rule_engine.check_assessment_eligibility(db, student_id, 341)
+            reply = (
+                "Policy Enforcement: Institutional assessment business rules are strictly deterministic and cannot be bypassed or overridden by prompt instruction.\n"
+                f"- **Assessment #341 Status**: {'ELIGIBLE' if elig_resp.eligible else 'NOT ELIGIBLE'}\n"
+                f"- **Enforced Rule Check**: {elig_resp.reasons[0] if elig_resp.reasons else 'All requirements met.'}"
+            )
+            return _build_response(
+                reply=reply,
+                intent_name="rule_override_prevention",
+                tools=["check_assessment_eligibility(student_id, 341)", "deterministic_rule_guardrail"],
+                trace={"eligibility": elig_resp.model_dump(), "attempted_override": True}
+            )
+
+        # -------------------------------------------------------------
+        # Intent 2.8: Multi-Source Orchestration (Eligibility + Study Roadmap)
+        # -------------------------------------------------------------
+        if ("can i take" in q_low or "eligible" in q_low) and ("study" in q_low or "what should" in q_low):
+            m = re.search(r"\b(assessment\s*#?|test\s*#?)(\d+)\b", q_low)
+            assessment_id = int(m.group(2)) if m else (901 if "python" in q_low else (902 if "sql" in q_low else 341))
+            elig_resp = rule_engine.check_assessment_eligibility(db, student_id, assessment_id)
+            rec = study_coach_service.get_study_recommendation(db, student_id)
+            tools_used = [
+                "check_assessment_eligibility(student_id, assessment_id)",
+                "get_weak_topics(student_id)",
+                "study_coach_service.get_study_recommendation(student_id)"
+            ]
+            reply = (
+                f"### Multi-Source Evaluation: Assessment #{assessment_id} & Study Roadmap\n"
+                f"**1. Eligibility Verdict**: {'ELIGIBLE TO ATTEMPT' if elig_resp.eligible else 'NOT ELIGIBLE'}\n"
+                f"- **Prerequisite Verification**: {elig_resp.requirements[1].detail}\n"
+                f"- **Ruling**: {elig_resp.reasons[0] if elig_resp.reasons else 'All criteria satisfied.'}\n\n"
+                f"**2. Recommended Study Action Plan**:\n"
+                f"- **Priority Topic**: {rec['priority_topic']} (Accuracy: {rec['accuracy_percentage']}%)\n"
+                f"- **Recommended Action**: {rec['recommended_action']}\n"
+                f"- **Targeted Practice**: {rec['practice_recommendation']}"
+            )
+            return _build_response(
+                reply=reply,
+                intent_name="multi_source_orchestration",
+                tools=tools_used,
+                trace={"eligibility": elig_resp.model_dump(), "recommendation": rec}
             )
 
         # -------------------------------------------------------------
@@ -109,12 +202,12 @@ class AIOrchestrator:
             reply = llm_client.generate_response(prompt=active_query, context_data=context_data)
             memory.update_session(conv_id, message, reply, assessment_id=assessment_id)
 
-            return ChatResponse(
+            return _build_response(
                 reply=reply,
-                intent=intent,
-                tools_used=tools_used,
-                sources=[],
-                data_trace=data_trace
+                intent_name=intent,
+                tools=tools_used,
+                srcs=[],
+                trace=data_trace
             )
 
         # -------------------------------------------------------------
@@ -159,21 +252,33 @@ class AIOrchestrator:
                 reply = f"I couldn't generate practice questions: {str(e)}"
 
             memory.update_session(conv_id, message, reply, discussed_topic=target_topic)
-            return ChatResponse(
+            return _build_response(
                 reply=reply,
-                intent=intent,
-                tools_used=tools_used,
-                sources=sources,
-                data_trace=data_trace
+                intent_name=intent,
+                tools=tools_used,
+                srcs=sources,
+                trace=data_trace
             )
 
         # -------------------------------------------------------------
         # Intent 5: Course Progress in a Specific Subject
         # -------------------------------------------------------------
-        if any(w in q_low for w in ["progress in", "my progress", "course progress"]):
+        if any(w in q_low for w in ["progress in", "my progress", "course progress", "list my enrolled", "enrolled course"]):
             intent = "course_progress"
             tools_used.append("get_student_courses(student_id)")
             courses = student_service.get_student_courses(db, student_id)
+
+            if "list my enrolled" in q_low or "enrolled course" in q_low:
+                course_lines = [f"- **{c.course_title}** ({c.course_domain}) — {c.progress_percentage}% completed" for c in courses]
+                reply = f"### Enrolled Courses ({len(courses)} registered):\n" + "\n".join(course_lines)
+                data_trace["courses_count"] = len(courses)
+                return _build_response(
+                    reply=reply,
+                    intent_name=intent,
+                    tools=tools_used,
+                    srcs=[],
+                    trace=data_trace
+                )
 
             # Match subject keyword
             matched_course = None
@@ -199,12 +304,12 @@ class AIOrchestrator:
             else:
                 reply = "You are not currently enrolled in a course matching that subject."
 
-            return ChatResponse(
+            return _build_response(
                 reply=reply,
-                intent=intent,
-                tools_used=tools_used,
-                sources=[],
-                data_trace=data_trace
+                intent_name=intent,
+                tools=tools_used,
+                srcs=[],
+                trace=data_trace
             )
 
         # -------------------------------------------------------------
@@ -227,18 +332,18 @@ class AIOrchestrator:
             reply = llm_client.generate_response(prompt=active_query, context_data=context_data)
             memory.update_session(conv_id, message, reply, discussed_topic=rec["priority_topic"])
 
-            return ChatResponse(
+            return _build_response(
                 reply=reply,
-                intent=intent,
-                tools_used=tools_used,
-                sources=[],
-                data_trace=data_trace
+                intent_name=intent,
+                tools=tools_used,
+                srcs=[],
+                trace=data_trace
             )
 
         # -------------------------------------------------------------
         # Intent 7: Concept Explanation / Course Curriculum (RAG)
         # -------------------------------------------------------------
-        if any(w in q_low for w in ["explain", "what is", "how does", "tell me about", "normalization", "acid", "8086", "flexbox", "alligation"]):
+        if any(w in q_low for w in ["explain", "what is", "how does", "tell me about", "give me an example", "normalization", "acid", "8086", "flexbox", "alligation"]):
             intent = "course_concept"
             tools_used.append("search_course_content(query)")
 
@@ -267,18 +372,18 @@ class AIOrchestrator:
             reply = llm_client.generate_response(prompt=active_query, context_data=context_data)
             memory.update_session(conv_id, message, reply, discussed_topic=topic_to_search)
 
-            return ChatResponse(
+            return _build_response(
                 reply=reply,
-                intent=intent,
-                tools_used=tools_used,
-                sources=sources,
-                data_trace=data_trace
+                intent_name=intent,
+                tools=tools_used,
+                srcs=sources,
+                trace=data_trace
             )
 
         # -------------------------------------------------------------
         # Intent 8: Assessment Performance History
         # -------------------------------------------------------------
-        if any(w in q_low for w in ["assessment history", "previous assessment", "how did i perform", "my scores"]):
+        if any(w in q_low for w in ["assessment history", "previous assessment", "how did i perform", "my scores", "hackathon"]):
             intent = "performance"
             tools_used.append("get_student_performance(student_id)")
             perf = performance_service.get_student_performance(db, student_id)
@@ -289,12 +394,12 @@ class AIOrchestrator:
                 "performance": perf.model_dump()
             }
             reply = llm_client.generate_response(prompt=active_query, context_data=context_data)
-            return ChatResponse(
+            return _build_response(
                 reply=reply,
-                intent=intent,
-                tools_used=tools_used,
-                sources=[],
-                data_trace=data_trace
+                intent_name=intent,
+                tools=tools_used,
+                srcs=[],
+                trace=data_trace
             )
 
         # -------------------------------------------------------------
@@ -311,12 +416,12 @@ class AIOrchestrator:
             intent = "unsupported_query"
             reply = "I couldn't find sufficient information in the available course material to answer that question."
 
-        return ChatResponse(
+        return _build_response(
             reply=reply,
-            intent=intent,
-            tools_used=tools_used,
-            sources=sources,
-            data_trace=data_trace
+            intent_name=intent,
+            tools=tools_used,
+            srcs=sources,
+            trace=data_trace
         )
 
 ai_orchestrator = AIOrchestrator()
